@@ -787,8 +787,8 @@
              (->Eduction (filter (fn [^Datom d] (and (pred (.-v d))
                                                      (= tx (datom-tx d))))))))
          (if (indexing? db a)                                                 ;; _ a v _
-           (set/slice aevt (datom e0 a v tx0) (datom emax a v txmax))
-           (->> (set/slice aevt (datom e0 a nil tx0) (datom emax a nil txmax))
+           (set/slice avet (datom e0 a v tx0) (datom emax a v txmax))
+           (->> (set/slice avet (datom e0 a nil tx0) (datom emax a nil txmax))
              (->Eduction (filter (fn [^Datom d] (pred (.-v d)))))))
          (->> (set/slice aevt (datom e0 a nil tx0) (datom emax a nil txmax))  ;; _ a _ tx
            (->Eduction (filter (fn [^Datom d] (= tx (datom-tx d))))))
