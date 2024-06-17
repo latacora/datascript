@@ -7,27 +7,27 @@
     [me.tonsky.persistent-sorted-set :as set])
   (:import
     [datascript.db Datom]
-    [java.io BufferedOutputStream File FileOutputStream OutputStream PushbackReader] 
+    [java.io BufferedOutputStream File FileOutputStream OutputStream PushbackReader]
     [java.lang.ref WeakReference]
     [java.util ArrayList HashSet Iterator List]
     [me.tonsky.persistent_sorted_set ANode Branch Leaf PersistentSortedSet RefType Settings]))
 
 (defprotocol IStorage
   :extend-via-metadata true
-  
+
   (-store [_ addr+data-seq]
     "Gives you a sequence of `[addr data]` pairs to serialize and store.
-     
+
      `addr`s are 64 bit integers.
      `data`s are clojure-serializable data structure (maps, keywords, lists, integers etc)")
-  
+
   (-restore [_ addr]
     "Read back and deserialize data stored under single `addr`")
-  
+
   (-list-addresses [_]
     "Return seq that lists all addresses currently stored in your storage.
      Will be used during GC to remove keys that are no longer used.")
-  
+
   (-delete [_ addrs-seq]
     "Delete data stored under `addrs` (seq). Will be called during GC"))
 
@@ -98,6 +98,7 @@
       (let [eavt-addr (set/store (:eavt db) adapter)
             aevt-addr (set/store (:aevt db) adapter)
             avet-addr (set/store (:avet db) adapter)
+            vaet-addr (set/store (:vaet db) adapter)
             meta (merge
                    {:schema   (:schema db)
                     :max-eid  (:max-eid db)
@@ -105,6 +106,7 @@
                     :eavt     eavt-addr
                     :aevt     aevt-addr
                     :avet     avet-addr
+                    :vaet     vaet-addr
                     :max-addr @*max-addr}
                    (set/settings (:eavt db)))]
         (when (or force? (pos? (count @*store-buffer*)))
@@ -144,6 +146,7 @@
                        :eavt    (set/restore-by db/cmp-datoms-eavt eavt adapter opts)
                        :aevt    (set/restore-by db/cmp-datoms-aevt aevt adapter opts)
                        :avet    (set/restore-by db/cmp-datoms-avet avet adapter opts)
+                       :vaet    (set/restore-by db/cmp-datoms-vaet avet adapter opts)
                        :max-eid max-eid
                        :max-tx  max-tx})]
         (remember-db db)
@@ -171,8 +174,9 @@
   (let []
     (.walkAddresses ^PersistentSortedSet (:eavt db) visit-fn)
     (.walkAddresses ^PersistentSortedSet (:aevt db) visit-fn)
-    (.walkAddresses ^PersistentSortedSet (:avet db) visit-fn)))
-  
+    (.walkAddresses ^PersistentSortedSet (:avet db) visit-fn)
+    (.walkAddresses ^PersistentSortedSet (:vaet db) visit-fn)))
+
 (defn addresses [dbs]
   (let [*set     (volatile! (transient #{}))
         visit-fn #(vswap! *set conj! %)]
@@ -193,10 +197,10 @@
             (do
               (.remove iter)
               (recur res))
-            
+
             (identical? (storage db) storage')
             (recur (conj! res db))
-            
+
             :else
             (recur res)))
         (persistent! res)))))
@@ -232,7 +236,7 @@
    (.mkdirs (io/file dir))
    (let [addr->filename-fn (or (:addr->filename-fn opts) #(format "%08x" %))
          filename->addr-fn (or (:filename->addr-fn opts) #(Long/parseLong % 16))
-         write-fn  (or 
+         write-fn  (or
                      (:write-fn opts)
                      (when-some [freeze-fn (:freeze-fn opts)]
                        (fn [os o]
@@ -241,7 +245,7 @@
                        (with-open [wrt (io/writer os)]
                          (binding [*out* wrt]
                            (pr o)))))
-         read-fn   (or 
+         read-fn   (or
                      (:read-fn opts)
                      (when-some [thaw-fn (:thaw-fn opts)]
                        (fn [is]
@@ -255,17 +259,17 @@
            (util/log "store" (addr->filename-fn addr))
            (with-open [os (output-stream (io/file dir (addr->filename-fn addr)))]
              (write-fn os data))))
-       
+
        (-restore [_ addr]
          (util/log "restore" (addr->filename-fn addr))
          (with-open [is (io/input-stream (io/file dir (addr->filename-fn addr)))]
            (read-fn is)))
-       
+
        (-list-addresses [_]
          (into []
            (keep #(-> ^File %  .getName filename->addr-fn))
            (.listFiles (io/file dir))))
-       
+
        (-delete [_ addrs-seq]
          (doseq [addr addrs-seq]
            (util/log "deleting" (addr->filename-fn addr))
