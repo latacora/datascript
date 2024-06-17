@@ -1199,7 +1199,7 @@
   (case index
     :eavt (resolve-datom db c0 c1 c2 c3 default-e default-tx)
     :aevt (resolve-datom db c1 c0 c2 c3 default-e default-tx)
-    :avet (resolve-datom db c1 c2 c0 c3 default-e default-tx)
+    :avet (resolve-datom db c2 c0 c1 c3 default-e default-tx)
     :vaet (resolve-datom db c2 c1 c0 c3 default-e default-tx)))
 
 (defn find-datom [db index c0 c1 c2 c3]
