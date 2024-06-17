@@ -35,7 +35,7 @@
           data (last fragments)]
       `(throw (ex-info (str ~@(map (fn [m#] (if (string? m#) m# (list 'pr-str m#))) msgs)) ~data)))))
 
-(defn #?@(:clj  [^Boolean seqable?]  
+(defn #?@(:clj  [^Boolean seqable?]
           :cljs [^boolean seqable?])
   [x]
   (and (not (string? x))
@@ -109,7 +109,7 @@
          meta))))
 
 #?(:clj
-   (defmacro declare+ 
+   (defmacro declare+
      "Same idea as `declare`, but allows to declare type hints and arglists.
       This allows CLJS to generate more efficient code when calling this fn
       before it’s declared"
@@ -235,7 +235,7 @@
         IIndexed
         (-nth [this i] (nth-datom this i))
         (-nth [this i not-found] (nth-datom this i not-found))
-        
+
         IAssociative
         (-assoc [d k v] (assoc-datom d k v))
 
@@ -265,7 +265,7 @@
         (empty [d] (throw (UnsupportedOperationException. "empty is not supported on Datom")))
         (count [d] 5)
         (cons [d [k v]] (assoc-datom d k v))
-        
+
         clojure.lang.Indexed
         (nth [this i]           (nth-datom this i))
         (nth [this i not-found] (nth-datom this i not-found))
@@ -314,7 +314,7 @@
       :tx    (datom-tx d)
       :added (datom-added d)
       not-found)
-    
+
     (string? k)
     (case k
       "e"     (.-e d)
@@ -323,7 +323,7 @@
       "tx"    (datom-tx d)
       "added" (datom-added d)
       not-found)
-    
+
     :else
     not-found))
 
@@ -546,6 +546,13 @@
     (int-compare (.-e d1) (.-e d2))
     (int-compare (datom-tx d1) (datom-tx d2))))
 
+(defcomp cmp-datoms-vaet ^long [^Datom d1, ^Datom d2]
+   (combine-cmp
+     (value-cmp (.-v d1) (.-v d2))
+     (cmp (.-a d1) (.-a d2))
+     (int-compare (.-e d1) (.-e d2))
+     (int-compare (datom-tx d1) (datom-tx d2))))
+
 ;; fast versions without nil checks
 
 (defn- cmp-attr-quick
@@ -588,6 +595,13 @@
     (value-compare (.-v d1) (.-v d2))
     (int-compare (.-e d1) (.-e d2))
     (int-compare (datom-tx d1) (datom-tx d2))))
+
+(defcomp cmp-datoms-vaet-quick ^long [^Datom d1, ^Datom d2]
+ (combine-cmp
+   (value-compare (.-v d1) (.-v d2))
+   (cmp-attr-quick (.-a d1) (.-a d2))
+   (int-compare (.-e d1) (.-e d2))
+   (int-compare (datom-tx d1) (datom-tx d2))))
 
 (defn- diff-sorted [a b cmp]
   (loop [only-a []
@@ -680,13 +694,15 @@
   (-> db
     (update :eavt transient)
     (update :aevt transient)
-    (update :avet transient)))
+    (update :avet transient)
+    (update :vaet transient)))
 
 (defn db-persistent! [db]
   (-> db
     (update :eavt persistent!)
     (update :aevt persistent!)
-    (update :avet persistent!)))
+    (update :avet persistent!)
+    (update :vaet persistent!)))
 
 #?(:clj
     (defn vpred [v]
@@ -697,7 +713,7 @@
         (nil? v)     (fn [x] (nil? x))
         :else        (fn [x] (= v x)))))
 
-(defrecord-updatable DB [schema eavt aevt avet max-eid max-tx rschema pull-patterns pull-attrs hash]
+(defrecord-updatable DB [schema eavt aevt avet vaet max-eid max-tx rschema pull-patterns pull-attrs hash]
   #?@(:cljs
       [IHash                (-hash  [db]        (hash-db db))
        IEquiv               (-equiv [db other]  (equiv-db db other))
@@ -708,7 +724,8 @@
                                                        :rschema (.-rschema db)
                                                        :eavt    (empty (.-eavt db))
                                                        :aevt    (empty (.-aevt db))
-                                                       :avet    (empty (.-avet db))})
+                                                       :avet    (empty (.-avet db))
+                                                       :vaet   (empty (.-vaet db))})
                                                   (with-meta (meta db))))
        IPrintWithWriter     (-pr-writer [db w opts] (pr-db db w opts))
        IEditableCollection  (-as-transient [db] (db-transient db))
@@ -721,13 +738,14 @@
        clojure.lang.IPersistentCollection
                             (count [db]         (count eavt))
                             (equiv [db other]   (equiv-db db other))
-       clojure.lang.IEditableCollection 
+       clojure.lang.IEditableCollection
                             (empty [db]         (-> (restore-db
                                                       {:schema  (.-schema db)
                                                        :rschema (.-rschema db)
                                                        :eavt    (empty (.-eavt db))
                                                        :aevt    (empty (.-aevt db))
-                                                       :avet    (empty (.-avet db))})
+                                                       :avet    (empty (.-avet db))
+                                                       :vaet    (empty (.-vaet db))})
                                                   (with-meta (meta db))))
                             (asTransient [db] (db-transient db))
        clojure.lang.ITransientCollection
@@ -744,6 +762,7 @@
           eavt       (.-eavt db)
           aevt       (.-aevt db)
           avet       (.-avet db)
+          vaet       (.-vaet db)
           pred       #?(:clj  (vpred v)
                         :cljs #(= v %))
           multival?  (contains? (-attrs-by db :db.cardinality/many) a)]
@@ -762,21 +781,24 @@
            (->Eduction (filter (fn [^Datom d] (= tx (datom-tx d))))))
          (set/slice eavt (datom e nil nil tx0) (datom e nil nil txmax))       ;; e _ _ _
          (if (indexing? db a)                                                 ;; _ a v tx
-           (->> (set/slice avet (datom e0 a v tx0) (datom emax a v txmax))      
+           (->> (set/slice avet (datom e0 a v tx0) (datom emax a v txmax))
              (->Eduction (filter (fn [^Datom d] (= tx (datom-tx d))))))
            (->> (set/slice aevt (datom e0 a nil tx0) (datom emax a nil txmax))
              (->Eduction (filter (fn [^Datom d] (and (pred (.-v d))
                                                      (= tx (datom-tx d))))))))
          (if (indexing? db a)                                                 ;; _ a v _
            (set/slice avet (datom e0 a v tx0) (datom emax a v txmax))
-           (->> (set/slice aevt (datom e0 a nil tx0) (datom emax a nil txmax))
+           (->> (set/slice avet (datom e0 a nil tx0) (datom emax a nil txmax))
              (->Eduction (filter (fn [^Datom d] (pred (.-v d)))))))
          (->> (set/slice aevt (datom e0 a nil tx0) (datom emax a nil txmax))  ;; _ a _ tx
            (->Eduction (filter (fn [^Datom d] (= tx (datom-tx d))))))
          (set/slice aevt (datom e0 a nil tx0) (datom emax a nil txmax))       ;; _ a _ _
-         (filter (fn [^Datom d] (and (pred (.-v d))
-                                  (= tx (datom-tx d)))) eavt)                 ;; _ _ v tx
-         (filter (fn [^Datom d] (pred (.-v d))) eavt)                         ;; _ _ v 
+
+
+         (->> (set/slice vaet (datom e0 nil v tx) (datom emax nil v tx))
+              (->Eduction (filter (fn [^Datom d] (pred (.-v d))))))
+         (->> (set/slice vaet (datom e0 nil v tx0) (datom emax nil v txmax))
+              (->Eduction (filter (fn [^Datom d] (pred (.-v d))))))
          (filter (fn [^Datom d] (= tx (datom-tx d))) eavt)                    ;; _ _ _ tx
          eavt])))                                                             ;; _ _ _ _
 
@@ -805,7 +827,7 @@
     (set/slice (.-avet db)
       (resolve-datom db nil attr start nil e0 tx0)
       (resolve-datom db nil attr end nil emax txmax)))
-                
+
   clojure.data/EqualityPartition
   (equality-partition [x] :datascript/db)
 
@@ -1000,7 +1022,7 @@
 
             (when (= :db.cardinality/many (:db/cardinality (get schema attr)))
               (raise a " :db/tupleAttrs can’t depend on :db.cardinality/many attribute: " attr ex-data))))))))
-  
+
 (defn ^DB empty-db [schema opts]
   {:pre [(or (nil? schema) (map? schema))]}
   (validate-schema schema)
@@ -1010,6 +1032,7 @@
      :eavt          (set/sorted-set* (assoc opts :cmp cmp-datoms-eavt))
      :aevt          (set/sorted-set* (assoc opts :cmp cmp-datoms-aevt))
      :avet          (set/sorted-set* (assoc opts :cmp cmp-datoms-avet))
+     :vaet          (set/sorted-set* (assoc opts :cmp cmp-datoms-vaet))
      :max-eid       e0
      :max-tx        tx0
      :pull-patterns (lru/cache 100)
@@ -1054,6 +1077,9 @@
         avet-arr    (to-array avet-datoms)
         _           (arrays/asort avet-arr cmp-datoms-avet-quick)
         avet        (set/from-sorted-array cmp-datoms-avet avet-arr (arrays/alength avet-arr) opts)
+        vaet-arr    (to-array avet-datoms)
+        _           (arrays/asort vaet-arr cmp-datoms-vaet-quick)
+        vaet        (set/from-sorted-array cmp-datoms-vaet vaet-arr (arrays/alength vaet-arr) opts)
         max-eid     (init-max-eid rschema eavt avet)
         max-tx      (transduce (map (fn [^Datom d] (datom-tx d))) max tx0 eavt)]
     (map->DB
@@ -1062,13 +1088,14 @@
        :eavt          eavt
        :aevt          aevt
        :avet          avet
+       :vaet          vaet
        :max-eid       max-eid
        :max-tx        max-tx
        :pull-patterns (lru/cache 100)
        :pull-attrs    (lru/cache 100)
        :hash          (atom 0)})))
 
-(defn+ ^DB restore-db [{:keys [schema eavt aevt avet max-eid max-tx] :as keys}]
+(defn+ ^DB restore-db [{:keys [schema eavt aevt avet vaet max-eid max-tx] :as keys}]
   (map->DB
     {:schema        schema
      :rschema       (or (:rschema keys)
@@ -1076,6 +1103,7 @@
      :eavt          eavt
      :aevt          aevt
      :avet          avet
+     :vaet           vaet
      :max-eid       (or max-eid e0)
      :max-tx        (or max-tx tx0)
      :pull-patterns (lru/cache 100)
@@ -1144,7 +1172,7 @@
        (.write w "]}"))
 
      (defmethod print-method DB [db w] (pr-db db w))
-     (defmethod print-method FilteredDB [db w] (pr-db db w))     
+     (defmethod print-method FilteredDB [db w] (pr-db db w))
 ))
 
 (defn db-from-reader [{:keys [schema datoms]}]
@@ -1171,7 +1199,8 @@
   (case index
     :eavt (resolve-datom db c0 c1 c2 c3 default-e default-tx)
     :aevt (resolve-datom db c1 c0 c2 c3 default-e default-tx)
-    :avet (resolve-datom db c2 c0 c1 c3 default-e default-tx)))
+    :avet (resolve-datom db c2 c0 c1 c3 default-e default-tx)
+    :vaet (resolve-datom db c2 c1 c0 c3 default-e default-tx)))
 
 (defn find-datom [db index c0 c1 c2 c3]
   (validate-indexed db index c0 c1 c2 c3)
@@ -1215,7 +1244,7 @@
     (if (> eid emax)
       (raise "Highest supported entity id is " emax ", got " eid {:error :entity-id :value eid})
       eid)
-    
+
     (sequential? eid)
     (let [[attr value] eid]
       (cond
@@ -1229,9 +1258,9 @@
           nil
         :else
           (-> (-datoms db :avet attr value nil nil) first :e)))
-    
+
     #?@(:cljs [(array? eid) (recur db (array-seq eid))])
-    
+
     (keyword? eid)
     (-> (-datoms db :avet :db/ident eid nil nil) first :e)
 
@@ -1332,6 +1361,7 @@
         true      (update :eavt set/conj datom cmp-datoms-eavt-quick)
         true      (update :aevt set/conj datom cmp-datoms-aevt-quick)
         indexing? (update :avet set/conj datom cmp-datoms-avet-quick)
+        indexing? (update :vaet set/conj datom cmp-datoms-vaet-quick)
         true      (advance-max-eid (.-e datom))
         true      (assoc :hash (atom 0)))
       (if-some [removing (fsearch db [(.-e datom) (.-a datom) (.-v datom)])]
@@ -1339,6 +1369,7 @@
           true      (update :eavt set/disj removing cmp-datoms-eavt-quick)
           true      (update :aevt set/disj removing cmp-datoms-aevt-quick)
           indexing? (update :avet set/disj removing cmp-datoms-avet-quick)
+          indexing? (update :vaet set/disj removing cmp-datoms-vaet-quick)
           true      (assoc :hash (atom 0)))
         db))))
 
@@ -1376,10 +1407,10 @@
   (cond
     (keyword? attr)
     (= \_ (nth (name attr) 0))
-    
+
     (string? attr)
     (boolean (re-matches #"(?:([^/]+)/)?_([^/]+)" attr))
-   
+
     :else
     (raise "Bad attribute type: " attr ", expected keyword or string"
            {:error :transact/syntax, :attribute attr})))
@@ -1396,7 +1427,7 @@
      (if (= \_ (nth name 0))
        (if ns (str ns "/" (subs name 1)) (subs name 1))
        (if ns (str ns "/_" name) (str "_" name))))
-   
+
    :else
     (raise "Bad attribute type: " attr ", expected keyword or string"
            {:error :transact/syntax, :attribute attr})))
@@ -1453,7 +1484,7 @@
     [entity nil]))
 
 (defn validate-upserts
-  "Throws if not all upserts point to the same entity. 
+  "Throws if not all upserts point to the same entity.
    Returns single eid that all upserts point to, or null."
   [entity upserts]
   (let [upsert-ids (reduce-kv
@@ -1495,12 +1526,12 @@
     (not (or (arrays/array? vs)
              (and (coll? vs) (not (map? vs)))))
     [vs]
-    
+
     ;; probably lookup ref
     (and (= (count vs) 2)
          (is-attr? db (first vs) :db.unique/identity))
     [vs]
-    
+
     :else vs))
 
 (defn- explode [db entity]
@@ -1670,13 +1701,13 @@
             (let [id (current-tx report)]
               (recur (allocate-eid report old-eid id)
                      (cons (assoc entity :db/id id) entities)))
-           
+
             ;; lookup-ref => resolved | error
             (sequential? old-eid)
             (let [id (entid-strict db old-eid)]
               (recur report
                      (cons (assoc entity :db/id id) entities)))
-           
+
             ;; upserted => explode | error
             :let [[entity' upserts] (resolve-upserts db entity)
                   upserted-eid      (validate-upserts entity' upserts)]
@@ -1691,7 +1722,7 @@
                   (allocate-eid old-eid upserted-eid)
                   (update ::tx-redundant conjv (datom upserted-eid nil nil tx0)))
                 (concat (explode db (assoc entity' :db/id upserted-eid)) entities)))
-           
+
             ;; resolved | allocated-tempid | tempid | nil => explode
             (or (number? old-eid)
                 (nil?    old-eid)
@@ -1700,10 +1731,10 @@
                             (nil? old-eid)    (next-eid db)
                             (tempid? old-eid) (or (get tempids old-eid) (next-eid db))
                             :else             old-eid)
-                  new-entity (assoc entity :db/id new-eid)]                
+                  new-entity (assoc entity :db/id new-eid)]
               (recur (allocate-eid report old-eid new-eid)
                      (concat (explode db new-entity) entities)))
-           
+
             ;; trash => error
             :else
             (raise "Expected number, string or lookup ref for :db/id, got " old-eid
@@ -1715,7 +1746,7 @@
             (= op :db.fn/call)
             (let [[_ f & args] entity]
               (recur report (concat (apply f db args) entities)))
-            
+
             (and (keyword? op)
               (not (builtin-fn? op)))
             (if-some [ident (entid db op)]
@@ -1727,7 +1758,7 @@
                          {:error :transact/syntax, :operation :db.fn/call, :tx-data entity})))
               (raise "Can’t find entity for transaction fn " op
                      {:error :transact/syntax, :operation :db.fn/call, :tx-data entity}))
-            
+
             (and (tempid? e)
               (not= op :db/add))
             (raise "Can't use tempid in '" entity "'. Tempids are allowed in :db/add only"
@@ -1785,7 +1816,7 @@
               (if (and
                     (= (count tuple-attrs) (count v))
                     (every? some? v)
-                    (every? 
+                    (every?
                       (fn [[tuple-attr tuple-value]]
                         (let [db-value (:v (first (-datoms db :eavt e tuple-attr nil nil)))]
                           (= tuple-value db-value)))
@@ -1827,7 +1858,7 @@
 
            :else
            (raise "Unknown operation at " entity ", expected :db/add, :db/retract, :db.fn/call, :db.fn/retractAttribute, :db.fn/retractEntity or an ident corresponding to an installed transaction function (e.g. {:db/ident <keyword> :db/fn <Ifn>}, usage of :db/ident requires {:db/unique :db.unique/identity} in schema)" {:error :transact/syntax, :operation op, :tx-data entity})))
-       
+
        (datom? entity)
        (let [[e a v tx added] entity]
          (if added
