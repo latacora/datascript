@@ -388,7 +388,36 @@
     (assoc a
       :tuples (filterv #(nil? (hash (key-fn-a %))) tuples-a))))
 
-(defn lookup-pattern-db [db pattern]
+(defn- rel-with-attr [context sym]
+  (some #(when (contains? (:attrs %) sym) %) (:rels context)))
+
+(defn substitute-constant [context pattern-el]
+  (when (free-var? pattern-el)
+    (when-some [rel (rel-with-attr context pattern-el)]
+      (when-some [tuple (first (:tuples rel))]
+        (when (nil? (fnext (:tuples rel)))
+          (let [idx (get (:attrs rel) pattern-el)]
+            (#?(:cljs da/aget :clj get) tuple idx)))))))
+
+(defn substitute-constants [context pattern]
+  (mapv #(or (substitute-constant context %) %) pattern))
+
+(defn resolve-pattern-lookup-refs [source pattern]
+  (if (satisfies? db/IDB source)
+    (let [[e a v tx] pattern
+          e'         (if (or (lookup-ref? e) (attr? e))
+                       (db/entid-strict source e)
+                       e)
+          v'         (if (and v (attr? a) (db/ref? source a) (or (lookup-ref? v) (attr? v)))
+                       (db/entid-strict source v)
+                       v)
+          tx'        (if (lookup-ref? tx)
+                       (db/entid-strict source tx)
+                       tx)]
+      (subvec [e' a v' tx'] 0 (count pattern)))
+    pattern))
+
+(defn lookup-pattern-db [context db pattern]
   ;; TODO optimize with bound attrs min/max values here
   (let [search-pattern (mapv #(if (or (= % '_) (free-var? %)) nil %) pattern)
         datoms         (for [d (db/-search db search-pattern)]
@@ -409,11 +438,11 @@
           false))
       true)))
 
-(defn lookup-pattern-coll [coll pattern]
+(defn lookup-pattern-coll [context coll pattern]
   (let [data       (filter #(matches-pattern? pattern %) coll)
         attr->idx  (->> (map vector pattern (range))
-                        (filter (fn [[s _]] (free-var? s)))
-                        (into {}))]
+                     (filter (fn [[s _]] (free-var? s)))
+                     (into {}))]
     (Relation. attr->idx (mapv to-array data)))) ;; FIXME to-array
 
 (defn normalize-pattern-clause [clause]
@@ -421,12 +450,10 @@
     clause
     (concat ['$] clause)))
 
-(defn lookup-pattern [source pattern]
-  (cond
-    (satisfies? db/ISearch source)
-      (lookup-pattern-db source pattern)
-    :else
-      (lookup-pattern-coll source pattern)))
+(defn lookup-pattern [context source pattern]
+  (if (satisfies? db/ISearch source)
+    (lookup-pattern-db context source pattern)
+    (lookup-pattern-coll context source pattern)))
 
 (defn collapse-rels [rels new-rel]
   (loop [rels    rels
@@ -437,9 +464,6 @@
         (recur (next rels) (hash-join rel new-rel) acc)
         (recur (next rels) new-rel (conj acc rel)))
       (conj acc new-rel))))
-
-(defn- rel-with-attr [context sym]
-  (some #(when (contains? (:attrs %) sym) %) (:rels context)))
 
 (defn- context-resolve-val [context sym]
   (when-some [rel (rel-with-attr context sym)]
@@ -678,21 +702,6 @@
                              rel))))))))
         rel))))
 
-(defn resolve-pattern-lookup-refs [source pattern]
-  (if (satisfies? db/IDB source)
-    (let [[e a v tx] pattern
-          e'         (if (or (lookup-ref? e) (attr? e))
-                       (db/entid-strict source e)
-                       e)
-          v'         (if (and v (attr? a) (db/ref? source a) (or (lookup-ref? v) (attr? v)))
-                       (db/entid-strict source v)
-                       v)
-          tx'        (if (lookup-ref? tx)
-                       (db/entid-strict source tx)
-                       tx)]
-      (subvec [e' a v' tx'] 0 (count pattern)))
-    pattern))
-
 (defn dynamic-lookup-attrs [source pattern]
   (let [[e a v tx] pattern]
     (cond-> #{}
@@ -827,12 +836,14 @@
            relation
            (reduce
              (fn [relation pattern]
-               (let [rel' (lookup-pattern source pattern)]
+               (let [rel' (lookup-pattern context source pattern)]
                  (sum-rel relation (Relation. bindings (:tuples rel')))))
              (Relation. bindings [])
              bound-patterns)]
        (binding [*lookup-attrs*
-                 *lookup-attrs*]
+                 (if (satisfies? db/IDB source)
+                   (dynamic-lookup-attrs source generic-pattern)
+                   *lookup-attrs*)]
          (update context :rels collapse-rels relation))))))
 
 (defn resolve-clause [context clause]

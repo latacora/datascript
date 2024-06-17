@@ -1,6 +1,19 @@
 # WIP
 
+- Stable sorting of sequences of various types #470
+- Correctly restore `:max-tx` from storage
+- Fixed tempid/upsert resolution when multiple tempids are added first #472
+
+# 1.6.5 - May 3, 2024
+
+- Regression: fixed some OR queries broken in 1.6.4 #468 #469
+
+# 1.6.4
+
 - Implement “constant substitution” optimization for queries #462
+- Fixed :max-eid for dangling entities during reader-based serialization #463
+- Fixed tempid in unique refs #464
+- Pass through BigInteger/BigDeciman to freeze-fn in serializable #465 #466
 
 # 1.6.3
 
